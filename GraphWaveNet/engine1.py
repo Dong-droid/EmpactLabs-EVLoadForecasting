@@ -14,7 +14,7 @@ class trainer():
         self.scaler = scaler
         self.clip = 5
 
-    def train(self, input, real_val, epoch, epochs):
+    def train(self, input, real_val):
         self.model.train()
         self.optimizer.zero_grad()
         input = nn.functional.pad(input,(1,0,0,0))
