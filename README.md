@@ -80,7 +80,7 @@ python generate_training_data.py
 
 **예시: 피쳐 4개로 396개의 충전소의 48시간 동안의 수요 예측**
 ```bash
-python stgcn/train.py --dataset ours --n_his 168 --n_pred 48 
+python stgcn/train.py --dataset ours --n_his 168 --n_pred 48 --in_dim 5 (feature 개수)
 ```
 
 **예시: 피쳐 4개로 396개의 충전소의 48시간 동안의 수요 예측 + GAT 모듈 사용 (성능 올리기 위해)**
