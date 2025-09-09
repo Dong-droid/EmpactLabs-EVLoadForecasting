@@ -14,8 +14,8 @@ def get_parameters():
     parser = argparse.ArgumentParser(description='STGCN Visualization')
     parser.add_argument('--enable_cuda', type=bool, default=True, help='enable CUDA, default as True')
     parser.add_argument('--seed', type=int, default=7, help='set the random seed for stabilizing experiment results')
-    parser.add_argument('--dataset', type=str, default='ours_doc_bfs', choices=['metr-la', 'pems-bay', 'pemsd7-m', 'METR-LA', 'ours', 'ours_doc','ours_doc_one_week'], help='dataset name, default as METR-LA')
-    parser.add_argument('--n_his', type=int, default=48) # the number of time interval for history, default as 48, i.e., 24*7 hours 로 변경할 수 있음
+    parser.add_argument('--dataset', type=str, default='ours', choices=['metr-la', 'pems-bay', 'pemsd7-m', 'METR-LA', 'ours', 'ours_doc','ours_doc_one_week'], help='dataset name, default as METR-LA')
+    parser.add_argument('--n_his', type=int, default=24*7) # the number of time interval for history,s default as 48, i.e., 24*7 hours 로 변경할 수 있음
     parser.add_argument('--n_pred', type=int, default=48, help='the number of time i nterval for prediction, default as 3')
     parser.add_argument('--time_intvl', type=int, default=60)
     parser.add_argument('--Kt', type=int, default=3)
@@ -27,7 +27,7 @@ def get_parameters():
     parser.add_argument('--droprate', type=float, default=0.5)
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
     parser.add_argument('--weight_decay_rate', type=float, default=0.001, help='weight decay (L2 penalty)')
-    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--epochs', type=int, default=100, help='epochs, default as 1000')
     parser.add_argument('--opt', type=str, default='adamw', choices=['adamw', 'nadamw', 'lion'], help='optimizer, default as nadamw')
     parser.add_argument('--step_size', type=int, default=10)
@@ -35,11 +35,11 @@ def get_parameters():
     parser.add_argument('--patience', type=int, default=10, help='early stopping patience')
     parser.add_argument('--num_heads', type=int, default=4, help='number of attention heads for GAT')
     parser.add_argument('--gat_dropout', type=float, default=0.3, help='dropout for GAT')
-    parser.add_argument('--target_feature_index', type=int, default=1, help='예측할 타겟 피쳐 인덱스')
-   
+    parser.add_argument('--target_feature_index', type=int, default=0, help='예측할 타겟 피쳐 인덱스')
+    parser.add_argument('--in_dim', type=int, default=7, help='input feature dimension, default as 2')
     # Model checkpoint paths
-    parser.add_argument('--base_ckpt', type=str, default='./STGCN_BASE.pt', help='base model checkpoint path')
-    parser.add_argument('--gat_ckpt', type=str, default='./STGCN_GAT_BEST', help='gat model checkpoint path')
+    parser.add_argument('--base_ckpt', type=str, default='./checkpoint/STGCN_ours.pt', help='base model checkpoint path')
+    parser.add_argument('--gat_ckpt', type=str, default='./checkpoint/STGCN_GAT_BEST', help='gat model checkpoint path')
     
     # Visualization parameters
     parser.add_argument('--max_batches', type=int, default=None, help='maximum number of batches to process for visualization')
@@ -65,7 +65,7 @@ def get_parameters():
 
     # blocks: settings of channel size in st_conv_blocks and output layer
     blocks = []
-    blocks.append([4])
+    blocks.append([args.in_dim])
     for l in range(args.stblock_num):
         blocks.append([64, 32, 64])
     if Ko == 0:
@@ -87,10 +87,10 @@ def load_and_prepare_data(data_path, batch_size):
 
     # StandardScaler를 사용하여 데이터 정규화 (train set 기준)
     print(data['x_train'][...,0].mean(), data['x_train'][...,1].mean())
-    scaler = utility.StandardScaler(mean=data['x_train'][..., 1].mean(), std=data['x_train'][..., 1].std())
+    scaler = utility.StandardScaler(mean=data['x_train'][..., args.target_feature_index].mean(), std=data['x_train'][..., args.target_feature_index].std())
     for category in ['train', 'val', 'test']:
-        data['x_' + category][..., 1] = scaler.transform(data['x_' + category][..., 1])
-        data['y_' + category][..., 1] = scaler.transform(data['y_' + category][..., 1])
+        data['x_' + category][..., args.target_feature_index] = scaler.transform(data['x_' + category][..., args.target_feature_index])
+        data['y_' + category][..., args.target_feature_index] = scaler.transform(data['y_' + category][..., args.target_feature_index])
 
     # PyTorch Dataset 객체 생성
     train_dataset = utility.CustomDataset(data['x_train'], data['y_train'])
@@ -126,7 +126,7 @@ def data_preparate(args, device):
     test_iter = data['test_loader']
     zscore = data['scaler']
     n_vertex = data['x_train'].shape[2]  # 충전소(정점) 개수  
-    
+    print(n_vertex)
     return n_vertex, zscore, test_iter, data
 
 def load_models(args, blocks, n_vertex, device):
@@ -143,15 +143,15 @@ def load_models(args, blocks, n_vertex, device):
         print(f"✓ Base model loaded from {args.base_ckpt}")
     except Exception as e:
         print(f"✗ Failed to load base model: {e}")
-    try:
-        args.graph_conv_type = 'gat'
-        gat_model = models.STGCNChebGraphConvGAT(args, blocks, n_vertex).to(device)
-        gat_model.load_state_dict(torch.load(args.gat_ckpt, map_location=device))
-        gat_model.eval()
-        models_dict['GAT'] = gat_model
-        print(f"✓ GAT model loaded from {args.gat_ckpt}")
-    except Exception as e:
-        print(f"✗ Failed to load GAT model: {e}")
+    # try:
+    #     args.graph_conv_type = 'gat'
+    #     gat_model = models.STGCNChebGraphConvGAT(args, blocks, n_vertex).to(device)
+    #     gat_model.load_state_dict(torch.load(args.gat_ckpt, map_location=device))
+    #     gat_model.eval()
+    #     models_dict['GAT'] = gat_model
+    #     print(f"✓ GAT model loaded from {args.gat_ckpt}")
+    # except Exception as e:
+    #     print(f"✗ Failed to load GAT model: {e}")
 
     return models_dict
 def evaluate_metric(model,
@@ -163,7 +163,7 @@ def evaluate_metric(model,
         pred, true = None, None
         
         for x, y in data_iter:
-            y = y.permute(0, 3, 1, 2)[:,1,:,:].to(args.device)
+            y = y.permute(0, 3, 1, 2)[:,args.target_feature_index,:,:].to(args.device)
             x = x.permute(0, 3, 1, 2).to(args.device)
             y_pred_tensor = model(x)
             if len(y_pred_tensor.shape) > len(y.shape):
@@ -197,7 +197,7 @@ def extract_and_predict_from_loader(
     realy = None
     for name, net in nets.items():
         net = net.to(device).eval()
-        pred, real = evaluate_metric(net, dataloader, scaler, use_mask=False, args=args)
+        pred, real = evaluate_metric(net, dataloader, scaler, args=args)
         yhat[name] = pred
     return yhat, real
 
@@ -228,10 +228,10 @@ def quick_plot_comparison(
     pred_vecs = {}
     for name in yhat:
         pred_vecs[name] = yhat[name][sample_idx, :, node_idx] #.numpy()  # (T,)
-    with open('./pred.pkl', 'rb') as f:
-        pred_gwn = pickle.load(f)
-    print(pred_gwn.shape)
-    pred_vecs['GraphWaveNet'] = pred_gwn[sample_idx, node_idx, :]
+    # with open('./pred.pkl', 'rb') as f: # GraphWaveNet 예측 결과 로드
+    #     pred_gwn = pickle.load(f)
+    # print(pred_gwn.shape)
+    # pred_vecs['GraphWaveNet'] = pred_gwn[sample_idx, node_idx, :]
     print("Completed")
     # Plot
     plt.figure(figsize=(12, 6))
@@ -360,8 +360,8 @@ if __name__ == "__main__":
     
     # Generate sample visualizations
     print(f"\n=== Generating visualizations ===")
-    sample_indices = [0,48,95,142, 231, 327]  # Sample indices to visualize
-    node_indices = [0, 25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300, 325,115, 363, 282, 197]  # Node indices to visualize
+    sample_indices = [0]  # Sample indices to visualize
+    node_indices = [0]  # Node indices to visualize
     # node_indices =np.random.randint(0, 396, 10)
     for sample_idx in sample_indices:
         for node_idx in node_indices:
