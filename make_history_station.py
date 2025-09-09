@@ -9,8 +9,8 @@ generate_training_data.py
 
 """
 def create_history_csv(json_file_path="./data/ChargersStatusHistories.json", 
-                      output_path="./history.csv",
-                      top_n_stations=400,
+                      output_path="data/history.csv",
+                      top_n_stations=396,
                       cutoff_date="2025-02-13",
                       datetime_index=True):
     """
@@ -56,7 +56,7 @@ def create_history_csv(json_file_path="./data/ChargersStatusHistories.json",
     print("DataFrame 변환 중...")
     df = pd.json_normalize(flat_data)
     
-    # 4. 충전 중인 데이터만 필터링
+    # 4. 충전 중인 데이터만 필터링 # 여기 바꿔야 된다고 하셨죠??!!!!
     df = df[df['status.code'] == "charging"]
     print(f"충전 중인 데이터: {len(df)}개")
     
@@ -111,7 +111,7 @@ def create_history_csv(json_file_path="./data/ChargersStatusHistories.json",
 
 
 def create_station_csv(json_file_path="./data/Stations.json",
-                      output_path="./station.csv",
+                      output_path="data/station.csv",
                       target_city="Gyeonggi",
                       target_district="성남시"):
     """
@@ -290,7 +290,7 @@ def create_station_csv(json_file_path="./data/Stations.json",
         print(f"{target_city} 충전소 필터링 후: {len(df)}개")
     
     # 9. station.csv용 컬럼 선택 및 저장
-    station_columns = ["_id.$oid", "alternateId", "location.latitude", 
+    station_columns = ["_id", "alternateId", "location.latitude", 
                       "location.longitude", "limit.status", "isParkingFree"]
     
     # 컬럼이 존재하는지 확인
@@ -302,7 +302,7 @@ def create_station_csv(json_file_path="./data/Stations.json",
     output_df = df[available_columns].copy()
     
     # statId 컬럼 추가 (history 데이터와 조인용)
-    output_df['statId'] = output_df["_id.$oid"]
+    output_df.rename(columns={"_id": "statId", "location.latitude": "lat", "location.longitude":"lng", "limit.status":"limit"}, inplace=True)
     
     # 10. CSV 파일로 저장
     output_df.to_csv(output_path, index=False)
@@ -331,18 +331,3 @@ if __name__ == "__main__":
     print(f"\nStation DataFrame shape: {station_df.shape}")
     print(f"History DataFrame shape: {history_df.shape}")
     
-    # 커스텀 설정 예제
-    station_df = create_station_csv(
-        json_file_path="./data/Stations.json",
-        output_path="./custom_station.csv",
-        target_city="Seoul",
-        target_district="강남구"
-    )
-    
-    history_df = create_history_csv(
-        json_file_path="./data/ChargersStatusHistories.json",
-        output_path="./custom_history.csv",
-        top_n_stations=200,
-        cutoff_date="2025-01-01",
-        datetime_index=True
-    )
