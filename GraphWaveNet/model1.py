@@ -6,13 +6,16 @@ class SpatialGATAttention(nn.Module):
     """
     GAT-style spatial attention for replacing GWP
     """
-    def __init__(self, in_channels, gso, num_heads=2, dropout=0.3, use_layer_norm=True):
+    def __init__(self, in_channels, gso=None, num_heads=2, dropout=0.3, use_layer_norm=True):
         super(SpatialGATAttention, self).__init__()
         self.in_channels = in_channels
         self.num_heads = num_heads
         self.head_dim = in_channels // num_heads
         self.gso = gso  # Graph structure (adjacency matrix)
         self.use_layer_norm = use_layer_norm
+        
+        # Ensure head_dim is valid
+        assert in_channels % num_heads == 0, f"in_channels ({in_channels}) must be divisible by num_heads ({num_heads})"
         
         # Multi-head attention parameters
         self.W_q = nn.Linear(in_channels, in_channels, bias=False)
@@ -40,13 +43,14 @@ class SpatialGATAttention(nn.Module):
     
     def forward(self, x):
         """
-        x: (B, C, T, N) or (B, C, N, T) depending on usage
-        For spatial attention, we expect (B, C, T, N)
+        x: (B, C, T, N) 
         """
         B, C, T, N = x.shape
+        device = x.device
         
         # Reshape for processing: (B*T, N, C)
         x_reshaped = x.permute(0, 2, 3, 1).reshape(B*T, N, C)
+        
         # Generate Q, K, V
         Q = self.W_q(x_reshaped)  # (B*T, N, C)
         K = self.W_k(x_reshaped)  # (B*T, N, C)
@@ -57,46 +61,40 @@ class SpatialGATAttention(nn.Module):
         K = K.view(B*T, N, self.num_heads, self.head_dim)
         V = V.view(B*T, N, self.num_heads, self.head_dim)
         
-        # GAT-style attention computation
-        # Compute attention scores for each head
-        attention_scores = []
+        # Process each head separately to avoid memory issues
+        output_heads = []
         for h in range(self.num_heads):
             q_h = Q[:, :, h, :]  # (B*T, N, head_dim)
             k_h = K[:, :, h, :]  # (B*T, N, head_dim)
+            v_h = V[:, :, h, :]  # (B*T, N, head_dim)
             
-            # GAT-style scoring
-            scores_src = torch.sum(q_h * self.a_src[h], dim=-1, keepdim=True)  # (B*T, N, 1)
-            scores_dst = torch.sum(k_h * self.a_dst[h], dim=-1, keepdim=True)  # (B*T, N, 1)
+            # GAT-style scoring - ensure tensors are on the same device
+            a_src_h = self.a_src[h].to(device)  # (head_dim,)
+            a_dst_h = self.a_dst[h].to(device)  # (head_dim,)
+            
+            scores_src = torch.sum(q_h * a_src_h, dim=-1, keepdim=True)  # (B*T, N, 1)
+            scores_dst = torch.sum(k_h * a_dst_h, dim=-1, keepdim=True)  # (B*T, N, 1)
             
             # Broadcast and add: (B*T, N, 1) + (B*T, 1, N) -> (B*T, N, N)
             scores = self.leaky_relu(scores_src + scores_dst.transpose(-2, -1))
             
-            # Apply graph structure mask (only attend to connected nodes)
+            # Apply graph structure mask (only attend to connected nodes) if available
             if self.gso is not None:
-                # Create mask from adjacency matrix
-                mask = (self.gso == 0).float() * -1e9
+                # Ensure GSO is on the same device
+                gso_device = self.gso.to(device) if isinstance(self.gso, torch.Tensor) else torch.tensor(self.gso, device=device)
+                mask = (gso_device == 0).float() * -1e9
                 scores = scores + mask.unsqueeze(0)  # Broadcast to (B*T, N, N)
             
             # Softmax attention weights
             attn_weights = F.softmax(scores, dim=-1)
             attn_weights = self.dropout(attn_weights)
-            attention_scores.append(attn_weights)
-        
-        # Apply attention and aggregate heads
-        output_heads = []
-        for h in range(self.num_heads):
-            v_h = V[:, :, h, :]  # (B*T, N, head_dim)
-            attn_h = attention_scores[h]  # (B*T, N, N)
             
             # Apply attention: (B*T, N, N) @ (B*T, N, head_dim) -> (B*T, N, head_dim)
-            out_h = torch.bmm(attn_h, v_h)
+            out_h = torch.bmm(attn_weights, v_h)
             output_heads.append(out_h)
         
         # Concatenate heads: (B*T, N, C)
         output = torch.cat(output_heads, dim=-1)
-        
-        # Add residual connection
-        # output = output + x_reshaped
         
         # Layer normalization
         if self.use_layer_norm:
@@ -119,6 +117,9 @@ class TemporalGATAttention(nn.Module):
         self.head_dim = in_channels // num_heads
         self.causal = causal
         self.use_layer_norm = use_layer_norm
+        
+        # Ensure head_dim is valid
+        assert in_channels % num_heads == 0, f"in_channels ({in_channels}) must be divisible by num_heads ({num_heads})"
         
         # Multi-head attention parameters
         self.W_q = nn.Linear(in_channels, in_channels, bias=False)
@@ -150,6 +151,7 @@ class TemporalGATAttention(nn.Module):
         For temporal attention, we process along time dimension
         """
         B, C, T, N = x.shape
+        device = x.device
         
         # Reshape for processing: (B*N, T, C)
         x_reshaped = x.permute(0, 3, 2, 1).reshape(B*N, T, C)
@@ -164,45 +166,38 @@ class TemporalGATAttention(nn.Module):
         K = K.view(B*N, T, self.num_heads, self.head_dim)
         V = V.view(B*N, T, self.num_heads, self.head_dim)
         
-        # GAT-style attention computation
-        attention_scores = []
+        # Process each head separately to avoid memory issues
+        output_heads = []
         for h in range(self.num_heads):
             q_h = Q[:, :, h, :]  # (B*N, T, head_dim)
             k_h = K[:, :, h, :]  # (B*N, T, head_dim)
+            v_h = V[:, :, h, :]  # (B*N, T, head_dim)
             
-            # GAT-style scoring
-            scores_src = torch.sum(q_h * self.a_src[h], dim=-1, keepdim=True)  # (B*N, T, 1)
-            scores_dst = torch.sum(k_h * self.a_dst[h], dim=-1, keepdim=True)  # (B*N, T, 1)
+            # GAT-style scoring - ensure tensors are on the same device
+            a_src_h = self.a_src[h].to(device)  # (head_dim,)
+            a_dst_h = self.a_dst[h].to(device)  # (head_dim,)
+            
+            scores_src = torch.sum(q_h * a_src_h, dim=-1, keepdim=True)  # (B*N, T, 1)
+            scores_dst = torch.sum(k_h * a_dst_h, dim=-1, keepdim=True)  # (B*N, T, 1)
             
             # Broadcast and add: (B*N, T, 1) + (B*N, 1, T) -> (B*N, T, T)
             scores = self.leaky_relu(scores_src + scores_dst.transpose(-2, -1))
             
             # Apply causal mask for temporal attention
             if self.causal:
-                causal_mask = torch.triu(torch.ones(T, T), diagonal=1).bool()
-                causal_mask = causal_mask.to(x.device)
+                causal_mask = torch.triu(torch.ones(T, T, device=device), diagonal=1).bool()
                 scores = scores.masked_fill(causal_mask.unsqueeze(0), -1e9)
             
             # Softmax attention weights
             attn_weights = F.softmax(scores, dim=-1)
             attn_weights = self.dropout(attn_weights)
-            attention_scores.append(attn_weights)
-        
-        # Apply attention and aggregate heads
-        output_heads = []
-        for h in range(self.num_heads):
-            v_h = V[:, :, h, :]  # (B*N, T, head_dim)
-            attn_h = attention_scores[h]  # (B*N, T, T)
             
             # Apply attention: (B*N, T, T) @ (B*N, T, head_dim) -> (B*N, T, head_dim)
-            out_h = torch.bmm(attn_h, v_h)
+            out_h = torch.bmm(attn_weights, v_h)
             output_heads.append(out_h)
         
         # Concatenate heads: (B*N, T, C)
         output = torch.cat(output_heads, dim=-1)
-        
-        # Add residual connection
-        # output = output + x_reshaped
         
         # Layer normalization
         if self.use_layer_norm:
@@ -262,6 +257,7 @@ class gwnetgat(nn.Module):
         self.layers = layers
         self.gcn_bool = gcn_bool
         self.addaptadj = addaptadj
+        self.device = device
 
         self.filter_convs = nn.ModuleList()
         self.gate_convs = nn.ModuleList()
@@ -287,8 +283,8 @@ class gwnetgat(nn.Module):
             if aptinit is None:
                 if supports is None:
                     self.supports = []
-                self.nodevec1 = nn.Parameter(torch.randn(num_nodes, 10).to(device), requires_grad=True).to(device)
-                self.nodevec2 = nn.Parameter(torch.randn(10, num_nodes).to(device), requires_grad=True).to(device)
+                self.nodevec1 = nn.Parameter(torch.randn(num_nodes, 10).to(device), requires_grad=True)
+                self.nodevec2 = nn.Parameter(torch.randn(10, num_nodes).to(device), requires_grad=True)
                 self.supports_len +=1
             else:
                 if supports is None:
@@ -314,7 +310,7 @@ class gwnetgat(nn.Module):
                                                  kernel_size=(1, kernel_size), dilation=new_dilation))
 
                 # 1x1 convolution for residual connection
-                self.residual_convs.append(nn.Conv1d(in_channels=dilation_channels,
+                self.residual_convs.append(nn.Conv2d(in_channels=dilation_channels,
                                                      out_channels=residual_channels,
                                                      kernel_size=(1, 1)))
 
@@ -329,10 +325,13 @@ class gwnetgat(nn.Module):
                 if self.gcn_bool:
                     self.gconv.append(gcn(dilation_channels,residual_channels,dropout,support_len=self.supports_len))
                 
-                self.sgat.append(SpatialGATAttention(dilation_channels, num_heads=num_heads, dropout=gat_dropout, gso=supports[0], use_layer_norm=layernorm))
+                # Get GSO for spatial attention - handle case where supports might be None or empty
+                gso = None
+                if supports is not None and len(supports) > 0:
+                    gso = supports[0]
+                
+                self.sgat.append(SpatialGATAttention(dilation_channels, num_heads=num_heads, dropout=gat_dropout, gso=gso, use_layer_norm=layernorm))
                 self.tgat.append(TemporalGATAttention(dilation_channels, num_heads=num_heads, dropout=gat_dropout,use_layer_norm=layernorm, causal=True))
-
-
 
         self.end_conv_1 = nn.Conv2d(in_channels=skip_channels,
                                   out_channels=end_channels,
@@ -345,8 +344,6 @@ class gwnetgat(nn.Module):
                                     bias=True)
 
         self.receptive_field = receptive_field
-
-
 
     def forward(self, input):
         in_len = input.size(3)
@@ -365,19 +362,6 @@ class gwnetgat(nn.Module):
 
         # WaveNet layers
         for i in range(self.blocks * self.layers):
-
-            #            |----------------------------------------|     *residual*
-            #            |                                        |
-            #            |    |-- conv -- tanh --|                |
-            # -> dilate -|----|                  * ----|-- 1x1 -- + -->	*input*
-            #                 |-- conv -- sigm --|     |
-            #                                         1x1
-            #                                          |
-            # ---------------------------------------> + ------------->	*skip*
-
-            #(dilation, init_dilation) = self.dilations[i]
-
-            #residual = dilation_func(x, dilation, init_dilation, i)
             residual = x
             # dilated convolution
             filter = self.filter_convs[i](residual)
@@ -387,7 +371,6 @@ class gwnetgat(nn.Module):
             x = filter * gate
 
             # parametrized skip connection
-
             s = x
             s = self.skip_convs[i](s)
             try:
@@ -395,7 +378,6 @@ class gwnetgat(nn.Module):
             except:
                 skip = 0
             skip = s + skip
-
 
             if self.gcn_bool and self.supports is not None:
                 if self.addaptadj:
@@ -406,20 +388,19 @@ class gwnetgat(nn.Module):
                 x = self.residual_convs[i](x)
 
             x = x + residual[:, :, :, -x.size(3):]
-            # gat#############
-            x_swp = x.permute(0,1,3,2)
-            x_twp = x.permute(0,1,3,2) # (B, C, T, N)
-            swp_out = self.sgat[i](x_swp).permute(0,1,3,2)  # (B, C, N, T)
-            twp_out = self.tgat[i](x_twp).permute(0,1,3,2)  # (B, C, N, T)
-            x = x + twp_out + swp_out 
-            ##################
+            
+            # GAT attention - ensure proper tensor format
+            x_swp = x.permute(0,1,3,2)  # (B, C, N, T) -> (B, C, T, N) for spatial
+            x_twp = x.permute(0,1,3,2)  # (B, C, N, T) -> (B, C, T, N) for temporal
+            
+            # Apply GAT attention
+            swp_out = self.sgat[i](x_swp).permute(0,1,3,2)  # (B, C, T, N) -> (B, C, N, T)
+            twp_out = self.tgat[i](x_twp).permute(0,1,3,2)  # (B, C, T, N) -> (B, C, N, T)
+            
+            x = x + swp_out + twp_out
             x = self.bn[i](x)
 
         x = F.relu(skip)
         x = F.relu(self.end_conv_1(x))
         x = self.end_conv_2(x)
         return x
-
-
-
-
