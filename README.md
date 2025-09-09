@@ -1,7 +1,7 @@
 # 전기차 충전 수요 예측 프로젝트 (Spatio-Temporal Graph Neural Network)
 
 ## 1. 프로젝트 개요 (Project Overview)
-본 프로젝트는 성남시 전기차 충전소의 과거 이력 데이터를 바탕으로 미래의 충전 수요를 예측하는 것을 목표로 합니다. STGCN(Spatio-Temporal Graph Convolutional Network)을 기반 모델로 사용합니다. GAT모듈을 추가로 사용할 수 있습니다. (WP 코드는 학교 저작권 문제로 포함하지 않았습니다.)
+본 프로젝트는 성남시 전기차 충전소의 과거 이력 데이터를 바탕으로 미래의 충전 수요를 예측하는 것을 목표로 합니다. STGCN(Spatio-Temporal Graph Convolutional Network)을 기반 모델로 사용합니다.
 
 ## 2. 디렉토리 구조 (Directory Structure)
 ```
