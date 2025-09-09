@@ -10,7 +10,6 @@ import torch.optim as optim
 import torch.utils as utils
 import warnings
 from script import dataloader, utility, earlystopping, opt
-from model.wp import adjust_wp_hparams, collect_wp_modules, get_param_groups
 from model import models
 import tqdm
 import wandb
@@ -24,17 +23,19 @@ def get_parameters():
     parser.add_argument('--enable_cuda', type=bool, default=True, help='CUDA 사용 여부')
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--seed', type=int, default=7, help='랜덤 시드 고정 (재현성)')
-    parser.add_argument('--dataset', type=str, default='ours_doc_one_week', 
-                        choices=['metr-la', 'pems-bay', 'pemsd7-m', 'METR-LA', 'ours', 'ours_doc', 'ours_doc_one_week']) 
-    parser.add_argument('--n_his', type=int, default=24*7, help='입력 시계열 길이')
-    parser.add_argument('--n_pred', type=int, default=48, help='예측할 타임스텝 수')
+    parser.add_argument('--dataset', type=str, default='ours',  # 수정 필요
+                        choices=['metr-la', 'pems-bay', 'pemsd7-m', 'METR-LA', 'ours' ]) 
+    # in_dim은 피쳐 개수로 설정 
+    parser.add_argument('--in_dim', type=int, default=7, help='입력 피쳐 수') # 수정 필요
+    parser.add_argument('--n_his', type=int, default=24*7, help='입력 시계열 길이') # 수정 필요
+    parser.add_argument('--n_pred', type=int, default=48, help='예측할 타임스텝 수') # 수정 필요
     parser.add_argument('--time_intvl', type=int, default=60, help='타임스텝 간격 (분)')
     parser.add_argument('--Kt', type=int, default=3, help='시간 축 커널 크기')
     parser.add_argument('--stblock_num', type=int, default=2, help='ST 블록 개수')
     parser.add_argument('--act_func', type=str, default='glu', choices=['glu', 'gtu'], help='활성 함수')
     parser.add_argument('--Ks', type=int, default=3, choices=[3, 2], help='공간 축 커널 크기')
     parser.add_argument('--graph_conv_type', type=str, default='cheb_graph_conv', 
-                        choices=['cheb_graph_conv', 'graph_conv', 'wp', 'gat'], help='그래프 합성곱 방식')
+                        choices=['cheb_graph_conv', 'graph_conv', 'gat'], help='그래프 합성곱 방식')
     parser.add_argument('--gso_type', type=str, default='sym_norm_lap', 
                         choices=['sym_norm_lap', 'rw_norm_lap', 'sym_renorm_adj', 'rw_renorm_adj'], help='그래프 시프트 연산자 유형')
     parser.add_argument('--enable_bias', type=bool, default=True, help='바이어스 사용 여부')
@@ -47,7 +48,7 @@ def get_parameters():
     parser.add_argument('--step_size', type=int, default=10, help='LR 스케줄러 step size')
     parser.add_argument('--gamma', type=float, default=0.95, help='LR 스케줄러 감쇠율')
     parser.add_argument('--patience', type=int, default=10, help='Early Stopping patience 값')
-    parser.add_argument('--target_feature_index', type=int, default=1, help='예측할 타겟 피쳐 인덱스')
+    parser.add_argument('--target_feature_index', type=int, default=0, help='예측할 타겟 피쳐 인덱스') # 수정 필요
     # 학습률과 배치사이즈는 튜닝을 추천 (lr [1e-3, 5e-4, 1e-4], batch_size [16, 32, 64])
     # GAT 파라미터 num_heads = (2,4), gat_dropout = (0~0.5) 튜닝 추천
     parser.add_argument('--num_heads', type=int, default=2, help='GAT multi-head attention 수')
@@ -73,7 +74,7 @@ def get_parameters():
 
     # ST 블록의 채널 크기 설정 (bottleneck 구조 사용)
     blocks = []
-    blocks.append([4])  # 입력 채널 수, 피쳐 수 4개 (점유율, 수요, has_fast_charger, has_slow_charger) ## 피쳐 수 변경 시 수정 필요
+    blocks.append([args.in_dim])  # 입력 채널 수, 피쳐 수 4개 (점유율, 수요, has_fast_charger, has_slow_charger) 
     for l in range(args.stblock_num):
         blocks.append([64, 32, 64])  # bottleneck 구조
         # blocks.append([64, 16, 64])  # 더 작은 bottleneck도 가능
@@ -97,7 +98,6 @@ def load_and_prepare_data(data_path, batch_size):
 
     # StandardScaler를 사용하여 데이터 정규화 (train set 기준)
     print(data['x_train'][...,0].mean(), data['x_train'][...,1].mean())
-    # 맞추고 싶은 feature가 1번 인덱스에 있다고 가정 지금 우리 데이터는 0번이 점유율, 1번이 수요, 2번이 has_fast_charger, 3번이 has_slow_charger 총 4개 
     scaler = utility.StandardScaler(mean=data['x_train'][..., args.target_feature_index].mean(), std=data['x_train'][..., args.target_feature_index].std()) # 1번 feature에 대해서만 스케일링 (정규화)
     for category in ['train', 'val', 'test']:
         data['x_' + category][..., args.target_feature_index] = scaler.transform(data['x_' + category][..., args.target_feature_index]) # 1번 feature에 대해서만 스케일링 (정규화)
@@ -164,6 +164,8 @@ def data_preparate(args, device):
 
 def prepare_model(args, blocks, n_vertex):
     loss = nn.MSELoss()
+    os.makedirs('stgcn/checkpoint', exist_ok=True)
+
     path = "./checkpoint/STGCN_" + args.dataset + ".pt" # 모델 저장 경로
     es = earlystopping.EarlyStopping(delta=0.0, 
                                      patience=args.patience, 
@@ -353,7 +355,7 @@ def test(zscore, loss, model, test_iter, args, path, data):
     model.eval()
     
     # Get predictions and ground truth
-    pred, real = evaluate_metric(model, test_iter, zscore, use_mask=False, args=args)
+    pred, real = evaluate_metric(model, test_iter, zscore, args=args)
     print(pred.shape, real.shape)
     print(f"Prediction shape: {pred.shape}, Ground truth shape: {real.shape}")
     
