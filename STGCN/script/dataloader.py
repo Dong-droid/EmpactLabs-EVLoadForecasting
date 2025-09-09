@@ -7,7 +7,7 @@ from scipy.sparse import coo_matrix
 
 
 def load_adj(dataset_name):
-    dataset_path = './data'
+    dataset_path = 'data/'
     dataset_path = os.path.join(dataset_path, dataset_name)
     adj = sp.load_npz(os.path.join(dataset_path, 'adj.npz'))
     adj = adj.tocsc()
@@ -19,8 +19,8 @@ def load_adj(dataset_name):
     elif dataset_name == 'pemsd7-m':
         n_vertex = 228
     ######################## 수정 필요 ######################################
-    elif dataset_name == 'ours_doc' or dataset_name == 'ours' or dataset_name == 'ours_doc_bfs' or dataset_name == "ours_doc_bfs_7":
-        n_vertex = 396
+    elif dataset_name == 'ours':
+        n_vertex = 392
     return adj, n_vertex
 
 def load_data(dataset_name, len_train, len_val):
