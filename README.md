@@ -24,7 +24,6 @@
 ├── generate_training_data.py       # 3. 모델 훈련/검증/테스트 데이터 생성 코드
 ├── requirements.txt                # 파이썬 라이브러리 의존성 파일
 ├── README.md                       # 프로젝트 안내 문서
-└── preprocess/                     # 사용한 노트북 파일들을 모두 담았습니다.
 ```
 
 ## 3. 설치 및 환경 설정 (Setup)
