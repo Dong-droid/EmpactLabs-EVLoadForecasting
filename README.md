@@ -19,7 +19,6 @@
 │   └── visualize.py
 ├── Graph-WaveNet/                  # 유틸리티 스크립트
 │   ├── train.py
-│   └── visualize.py
 ├── make_history_station_csv.py     # 1. history.csv 데이터 생성 코드
 ├── generate_data.py                # 2. history.csv와 station.csv 정보로 수요 집계 데이터와 인접 행렬 생성 코드
 ├── generate_training_data.py       # 3. 모델 훈련/검증/테스트 데이터 생성 코드
