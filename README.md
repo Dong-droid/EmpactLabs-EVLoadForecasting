@@ -55,7 +55,8 @@ pip install -r requirements.txt
 `data/ours_doc_bfs/` 경로에 `adj.npz`, `train.npz`, `val.npz`, `test.npz` 파일이 있는지 확인합니다. 데이터 생성이 필요한 경우, 아래 스크립트를 먼저 실행해야 합니다. 
 
 데이터 생성을 위해서 이미 전처리된 파일(`vel.csv`: 수요를 한 시간 단위로 집계한 파일, `adj.npz`: 충전소의 인접행렬)이 있어야 합니다.
-** json형태의 데이터를 csv데이터로 바꾸기 **
+
+**json형태의 데이터를 csv데이터로 바꾸기**
 ```bash
 python make_history_station_csv.py 
 ```
